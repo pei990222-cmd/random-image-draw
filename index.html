@@ -1,0 +1,313 @@
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隨機圖片抽籤站</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f6f4ff;color:#292540;font-family:Arial,"Microsoft JhengHei",sans-serif}
+main{max-width:1100px;margin:auto;padding:20px}
+h1{text-align:center;color:#7055d9}
+.tabs,.categories,.actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+button,.btn{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-size:15px;font-weight:bold;background:#eeeafd;color:#51419d}
+button.active,.primary{background:#7055d9;color:white}
+button:disabled{opacity:.4;cursor:not-allowed}
+.panel{background:white;border:1px solid #e4def8;border-radius:16px;padding:18px;margin-bottom:16px}
+.layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px}
+.category{flex:1;min-width:65px}
+.category strong{display:block;font-size:22px}
+#results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.photo{min-width:0;border:1px solid #e5e1f3;border-radius:12px;overflow:hidden;background:white}
+.photo img{display:block;width:100%;height:auto;max-height:72vh;object-fit:contain;background:#f3f1fa}
+.photo .name{padding:9px;overflow-wrap:anywhere}
+.admin-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.admin-grid img{width:100%;height:140px;object-fit:contain;background:#f3f1fa;display:block}
+.admin-grid input[type=text]{width:100%;padding:7px;border:1px solid #ddd;border-radius:6px}
+.admin-item{border:1px solid #e5e1f3;border-radius:10px;overflow:hidden;min-width:0}
+.admin-item .inner{padding:8px}
+.danger{background:#ffe8ed;color:#a52648}
+.muted{color:#77718e;font-size:14px;line-height:1.7}
+.hidden{display:none!important}
+input[type=file]{max-width:100%}
+@media(max-width:700px){
+ main{padding:10px}
+ .layout{grid-template-columns:1fr}
+ #results{grid-template-columns:1fr}
+ .admin-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .panel{padding:12px}
+}
+</style>
+</head>
+<body>
+<main>
+<h1>🎲 隨機圖片抽籤站</h1>
+<p class="muted" style="text-align:center">五種人數分類｜圖片管理｜完整顯示照片</p>
+
+<div class="tabs">
+<button class="active" data-page="drawPage">🎯 隨機抽取</button>
+<button data-page="managePage">🗂️ 圖片管理</button>
+</div>
+
+<section id="drawPage">
+<div id="drawCategories" class="categories"></div>
+<div class="layout">
+<div class="panel">
+<h3 id="drawTitle">抽取 1 人組圖片</h3>
+<p id="count" class="muted">目前 0 張圖片</p>
+<button id="drawBtn" class="primary" style="width:100%" disabled>✨ 隨機抽一張</button>
+<button id="againBtn" style="width:100%;margin-top:8px" disabled>🔀 重新抽取</button>
+<p id="status" class="muted"></p>
+</div>
+<div class="panel">
+<h3>抽取結果</h3>
+<div id="results" class="muted">選擇分類後，按下「隨機抽一張」。</div>
+</div>
+</div>
+</section>
+
+<section id="managePage" class="hidden">
+<div class="panel">
+<h3>圖片管理區</h3>
+<p class="muted">先選分類，再新增、改名、替換或刪除圖片。</p>
+<div id="manageCategories" class="categories"></div>
+<label>新增圖片（可一次選多張）：
+<input id="upload" type="file" accept="image/*" multiple>
+</label>
+<div class="actions">
+<button id="backupBtn">備份所有圖片</button>
+<label class="btn" for="restoreFile">匯入備份</label>
+<input id="restoreFile" type="file" accept="application/json" class="hidden">
+</div>
+<p id="manageStatus" class="muted"></p>
+<div id="adminGrid" class="admin-grid"></div>
+</div>
+<div class="panel muted">
+圖片會保存在目前瀏覽器的本機資料庫中。一般關閉網頁後仍會保留，但清除瀏覽器資料、使用無痕模式或換電腦可能造成遺失。建議定期備份。
+</div>
+</section>
+</main>
+
+<script>
+const DB_NAME = "ImageDrawSiteDB";
+const STORE = "images";
+const labels = {1:"1 人組",2:"2 人組",3:"3 人組",4:"4 人組",5:"5 人組"};
+let db;
+let images = [];
+let drawCat = 1;
+let manageCat = 1;
+let chosen = {};
+
+const $ = id => document.getElementById(id);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+
+function openDB(){
+ return new Promise((resolve,reject)=>{
+  const req = indexedDB.open(DB_NAME,1);
+  req.onupgradeneeded = () => {
+   if(!req.result.objectStoreNames.contains(STORE))
+    req.result.createObjectStore(STORE,{keyPath:"id"});
+  };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+ });
+}
+function getAll(){
+ return new Promise((resolve,reject)=>{
+  const req = db.transaction(STORE,"readonly").objectStore(STORE).getAll();
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+ });
+}
+function save(item){
+ return new Promise((resolve,reject)=>{
+  const tx = db.transaction(STORE,"readwrite");
+  tx.objectStore(STORE).put(item);
+  tx.oncomplete = resolve;
+  tx.onerror = () => reject(tx.error);
+ });
+}
+function remove(id){
+ return new Promise((resolve,reject)=>{
+  const tx = db.transaction(STORE,"readwrite");
+  tx.objectStore(STORE).delete(id);
+  tx.oncomplete = resolve;
+  tx.onerror = () => reject(tx.error);
+ });
+}
+function list(cat){return images.filter(x=>x.category===cat)}
+function safe(s){
+ return String(s).replace(/[&<>"']/g,c=>({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+ }[c]));
+}
+function urlFor(item){return URL.createObjectURL(item.blob)}
+
+function drawCategoryButtons(){
+ $("drawCategories").innerHTML = [1,2,3,4,5].map(n=>
+  `<button class="category ${n===drawCat?"active":""}" data-n="${n}">
+   <strong>${n}</strong>${labels[n]}（${list(n).length} 張）</button>`
+ ).join("");
+ $("drawCategories").querySelectorAll("button").forEach(b=>{
+  b.onclick=()=>{drawCat=Number(b.dataset.n);renderDraw()};
+ });
+}
+function manageCategoryButtons(){
+ $("manageCategories").innerHTML = [1,2,3,4,5].map(n=>
+  `<button class="category ${n===manageCat?"active":""}" data-n="${n}">
+   <strong>${n}</strong>${labels[n]}（${list(n).length} 張）</button>`
+ ).join("");
+ $("manageCategories").querySelectorAll("button").forEach(b=>{
+  b.onclick=()=>{manageCat=Number(b.dataset.n);renderManage()};
+ });
+}
+function renderDraw(){
+ drawCategoryButtons();
+ $("drawTitle").textContent="抽取 "+labels[drawCat]+" 圖片";
+ $("count").textContent="目前 "+list(drawCat).length+" 張圖片";
+ $("drawBtn").disabled=!list(drawCat).length;
+ $("againBtn").disabled=!list(drawCat).length;
+ const selected=list(drawCat).find(x=>x.id===chosen[drawCat]);
+ if(selected){
+  $("results").innerHTML=`<div class="photo">
+   <img src="${urlFor(selected)}" alt="${safe(selected.name)}">
+   <div class="name">${safe(selected.name)}</div></div>`;
+ }else{
+  $("results").textContent="選擇分類後，按下「隨機抽一張」。";
+ }
+}
+function renderManage(){
+ manageCategoryButtons();
+ $("adminGrid").innerHTML="";
+ list(manageCat).forEach(item=>{
+  const div=document.createElement("div");
+  div.className="admin-item";
+  const img=document.createElement("img");
+  img.src=urlFor(item);
+  img.alt=item.name;
+  const inner=document.createElement("div");
+  inner.className="inner";
+  const name=document.createElement("input");
+  name.type="text";name.value=item.name;name.title="圖片名稱";
+  name.onchange=async()=>{
+   item.name=name.value.trim()||"未命名圖片";
+   await save(item);await refresh();
+   $("manageStatus").textContent="名稱已更新。";
+  };
+  const replace=document.createElement("button");
+  replace.textContent="替換圖片";
+  replace.style.width="100%";
+  replace.style.marginTop="7px";
+  replace.onclick=()=>{
+   const input=document.createElement("input");
+   input.type="file";input.accept="image/*";
+   input.onchange=async()=>{
+    const file=input.files[0];if(!file)return;
+    item.blob=file;item.name=file.name;
+    await save(item);await refresh();
+    $("manageStatus").textContent="圖片已替換。";
+   };
+   input.click();
+  };
+  const del=document.createElement("button");
+  del.textContent="刪除圖片";del.className="danger";
+  del.style.width="100%";del.style.marginTop="7px";
+  del.onclick=async()=>{
+   if(!confirm("確定刪除這張圖片？"))return;
+   await remove(item.id);
+   if(chosen[manageCat]===item.id)delete chosen[manageCat];
+   await refresh();
+   $("manageStatus").textContent="圖片已刪除。";
+  };
+  inner.append(name,replace,del);
+  div.append(img,inner);
+  $("adminGrid").append(div);
+ });
+}
+async function refresh(){
+ images=await getAll();
+ renderDraw();renderManage();
+}
+function randomDraw(){
+ const arr=list(drawCat);
+ if(!arr.length)return;
+ const current=chosen[drawCat];
+ let candidates=arr.filter(x=>x.id!==current);
+ if(!candidates.length)candidates=arr;
+ const item=candidates[Math.floor(Math.random()*candidates.length)];
+ chosen[drawCat]=item.id;
+ try{localStorage.setItem("imageDrawChosen",JSON.stringify(chosen))}catch(e){}
+ $("status").textContent="抽取完成！";
+ renderDraw();
+}
+$("drawBtn").onclick=randomDraw;
+$("againBtn").onclick=randomDraw;
+
+$("upload").onchange=async e=>{
+ const files=Array.from(e.target.files||[]);
+ for(const file of files){
+  if(!file.type.startsWith("image/"))continue;
+  await save({id:uid(),category:manageCat,name:file.name,blob:file,created:Date.now()});
+ }
+ e.target.value="";
+ await refresh();
+ $("manageStatus").textContent="圖片已新增。";
+};
+
+$("backupBtn").onclick=async()=>{
+ const all=await getAll();
+ const rows=[];
+ for(const x of all){
+  rows.push({id:x.id,category:x.category,name:x.name,created:x.created,
+   type:x.blob.type,data:await new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(r.result);
+    r.onerror=reject;
+    r.readAsDataURL(x.blob);
+   })});
+ }
+ const blob=new Blob([JSON.stringify(rows)],{type:"application/json"});
+ const a=document.createElement("a");
+ a.href=URL.createObjectURL(blob);
+ a.download="圖片抽籤站備份.json";
+ a.click();
+ setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+};
+$("restoreFile").onchange=async e=>{
+ const file=e.target.files[0];if(!file)return;
+ try{
+  const rows=JSON.parse(await file.text());
+  if(!Array.isArray(rows))throw Error("格式不正確");
+  for(const r of rows){
+   if(!r.data||!r.category)continue;
+   const blob=await (await fetch(r.data)).blob();
+   await save({id:r.id||uid(),category:Number(r.category),name:r.name||"未命名圖片",created:r.created||Date.now(),blob});
+  }
+  await refresh();
+  $("manageStatus").textContent="備份匯入完成。";
+ }catch(err){
+  alert("匯入失敗，請確認備份檔案是否正確。");
+ }
+ e.target.value="";
+};
+document.querySelectorAll("[data-page]").forEach(btn=>{
+ btn.onclick=()=>{
+  document.querySelectorAll("[data-page]").forEach(b=>b.classList.toggle("active",b===btn));
+  $("drawPage").classList.toggle("hidden",btn.dataset.page!=="drawPage");
+  $("managePage").classList.toggle("hidden",btn.dataset.page!=="managePage");
+ };
+});
+
+(async()=>{
+ try{
+  db=await openDB();
+  try{chosen=JSON.parse(localStorage.getItem("imageDrawChosen")||"{}")}catch(e){}
+  await refresh();
+ }catch(e){
+  alert("瀏覽器無法使用本機資料庫，請改用最新版 Chrome 或 Edge 開啟。");
+ }
+})();
+</script>
+</body>
+</html>
